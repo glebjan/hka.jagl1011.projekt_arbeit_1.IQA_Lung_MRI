@@ -12,7 +12,9 @@ import torch
 from PIL import Image
 from skimage.filters import threshold_otsu
 
-from constants import INPUT, TARGET, REPORT
+import radimagenet_lpips  # noqa: F401 — registers RadImageNetLPIPS in pyiqa
+
+from constants import INPUT, TARGET, REPORT, RESNET50
 
 
 def _to_normalized_channel_tensor(depth_first_array: np.ndarray) -> torch.Tensor:
@@ -164,7 +166,10 @@ _METRIC_CACHE: dict[str, torch.nn.Module] = {}
 
 def _get_metric(name: str) -> torch.nn.Module:
     if name not in _METRIC_CACHE:
-        _METRIC_CACHE[name] = pyiqa.create_metric(name, as_loss=False)
+        kwargs = {}
+        if name == "radimagenet_lpips":
+            kwargs["backbone_path"] = str(RESNET50)
+        _METRIC_CACHE[name] = pyiqa.create_metric(name, as_loss=False, **kwargs)
     return _METRIC_CACHE[name]
 
 
@@ -189,13 +194,14 @@ def _active_segmenter() -> Callable[[np.ndarray], np.ndarray]:
 _MetricDirection = Literal["higher_is_better", "lower_is_better"]
 
 _METRIC_DIRECTION: dict[str, _MetricDirection] = {
-    "psnr":    "higher_is_better",
-    "ssim":    "higher_is_better",
-    "clipiqa": "higher_is_better",
-    "lpips":   "lower_is_better",
-    "dists":   "lower_is_better",
-    "brisque": "lower_is_better",
-    "niqe":    "lower_is_better",
+    "psnr":               "higher_is_better",
+    "ssim":               "higher_is_better",
+    "clipiqa":            "higher_is_better",
+    "lpips":              "lower_is_better",
+    "dists":              "lower_is_better",
+    "radimagenet_lpips":  "lower_is_better",
+    "brisque":            "lower_is_better",
+    "niqe":               "lower_is_better",
 }
 
 
@@ -233,6 +239,7 @@ class ImageEvaluatorRecord:
     ssim: Optional[float] = None
     lpips: Optional[float] = None
     dists: Optional[float] = None
+    radimagenet_lpips: Optional[float] = None
     clipiqa: Optional[float] = None
     brisque: Optional[float] = None
     niqe: Optional[float] = None
@@ -282,6 +289,12 @@ class IQAEvaluator:
             self.target.rgb_tensor[slice_index:slice_index+1],
         ).item())
 
+    def _compute_radimagenet_lpips(self, slice_index: int) -> float:
+        return float(_get_metric("radimagenet_lpips")(
+            self.input.rgb_tensor[slice_index:slice_index+1],
+            self.target.rgb_tensor[slice_index:slice_index+1],
+        ).item())
+
     def _compute_clipiqa(self, slice_index: int) -> float:
         return float(_get_metric("clipiqa")(self.input.rgb_tensor[slice_index:slice_index+1]).item())
 
@@ -325,6 +338,7 @@ class IQAEvaluator:
                     record.ssim  = self._run_safely("ssim",  lambda i=slice_index: self._compute_ssim(i))
                     record.lpips = self._run_safely("lpips", lambda i=slice_index: self._compute_lpips(i))
                     record.dists = self._run_safely("dists", lambda i=slice_index: self._compute_dists(i))
+                    record.radimagenet_lpips = self._run_safely("radimagenet_lpips", lambda i=slice_index: self._compute_radimagenet_lpips(i))
             records.append(record)
 
         self._run_safely("segmentation", lambda: self.segment_and_save_best_slices(records, MASK_DIR))
